@@ -1,4 +1,4 @@
-baseURL = 'http://danielwells.me/'
+baseURL = 'https://danielwells.me/'
 languageCode = 'en-us'
 title = 'Daniel Wells'
 theme = 'hyde'
