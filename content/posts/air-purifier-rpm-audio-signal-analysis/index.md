@@ -39,16 +39,16 @@ Repeating the analysis for high and slow settings:
 
 <img src="images/mean_brightness_high.png" width="960" />
 
-In the slowest speed the streak is more likely to be present in multiple frames:
+In the slowest speed the streak is more likely to be spread across multiple frames:
 <img src="images/mean_brightness_slow.png" width="960" />
 
-This gives the following frequencies:
-- Slow: 240 / 23.33 = 10.29 Hz (617 rpm)
-- Medium: 240 / 14.45 = 16.61 Hz (996 rpm)
-- High: 240 / 7.27 = 33.01 Hz (1981 rpm)
+The results above translate to the following frequencies:
+- Slow: 240 fps / 23.33 fpr = 10.29 Hz (617 rpm)
+- Medium: 240 fps / 14.45 fpr = 16.61 Hz (996 rpm)
+- High: 240 fps / 7.27 fpr = 33.01 Hz (1981 rpm)
 
 The high and low speeds are suspiciously close to exactly 2k and 1k rpm (33.33Hz / 16.66 Hz).
-I'm going to guess those are the true frequencies.
+I'm going to guess those are what the frequencies were designed to be.
 
 ### Audio Analysis
 
@@ -66,18 +66,18 @@ The frequency with the largest magnitude is at 11.00x the fundamental (183.07 Hz
 There is also a frequency at 60.01x the fundamental (998.50 Hz), though I'm not sure why... 
 <img src="images/FFT_Medium.png" width="960" />
 
-The peak at 108 Hz seems to be background noise because there are peaks there even when the fan is off:
+I think the peak at 108 Hz is likely to be background noise because there are peaks in that region even when the fan is off:
 <img src="images/FFT_Off.png" width="960" />
 
 On the low speed setting we would expect a peak around 10.3 Hz based on the video analysis, and there is a small peak there but I wouldn't have picked it out without the prior knowledge from the video analysis.
-The 24.6 Hz signal was also present when the fan was off so must be something unrelated.
+The 24.6 Hz signal was also present when the fan was off so probably something unrelated.
 <img src="images/FFT_Low.png" width="960" />
 
 On the high setting the fundamental is clearly present at 33.11 Hz as well as the second harmonic at 2.00x that.
 There is a small peak at around 11x the fundamental but it's barely above the background noise of the fan in this case.
 <img src="images/FFT_High.png" width="960" />
 
-Curiously the inferred rates are also slightly lower than exactly 2k and 1k rpm (33.33 Hz / 16.66 Hz) which suggests this is a real rather than noise or bias specific to the type of analysis.
+Curiously the inferred rates are also slightly lower than exactly 2k and 1k rpm (33.33 Hz / 16.66 Hz) which suggests this is a real difference rather than noise or bias specific to the type of analysis.
 I suspect this could be due to the AC mains frequency being slightly lower than 50 Hz at the time of recording.
 It might also be due to the air resistance / load, which would also explain why the discrepancy is higher at high speed.
 
