@@ -2,6 +2,7 @@ baseURL = 'https://www.danielwells.me/'
 languageCode = 'en-us'
 title = 'Daniel Wells'
 theme = 'hyde'
+googleAnalytics = 'UA-59299770-1'
 
 [markup]
   [markup.goldmark]
