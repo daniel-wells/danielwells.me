@@ -4,7 +4,7 @@ date: 2016-11-01
 draft: false
 ---
 
-<script src="http://platform.twitter.com/widgets.js" charset="utf-8"></script>
+<script src="https://platform.twitter.com/widgets.js" charset="utf-8"></script>
 Recently a paper was published in the journal Nature titled "[Evidence for a limit to human lifespan](http://www.nature.com/nature/journal/vaop/ncurrent/full/nature19793.html)" which received wide publicity, by [nature itself](http://www.nature.com/news/human-age-limit-claim-sparks-debate-1.20750), the [New York Times](http://www.nytimes.com/2016/10/06/science/maximum-life-span-study.html), the [Atlantic](http://www.theatlantic.com/science/archive/2016/10/humans-wont-ever-live-far-beyond-115-years/502967/), [the Guardian](https://www.theguardian.com/science/2016/oct/05/human-lifespan-has-hit-its-natural-limit-research-suggests), and [the BBC](http://www.bbc.co.uk/news/health-37552116) to name but a few. However some of the methods in this paper have been criticised:
 
 <blockquote class="twitter-tweet" data-lang="en">
