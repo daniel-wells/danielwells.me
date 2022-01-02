@@ -6,7 +6,8 @@ draft: false
 
 I have a [Blueair Blue 3410 Air Purifier](https://www.blueair.com/gb/blue/pure-311-auto/8319.html),
 but the technical specifications are quite sparse - for example they don't specify how fast the fan spins at each of the three speed settings.
-However, with a smartphone and some Python code we can work it out ourselves! There are two ways I can think of:
+However, with a smartphone and some [Python code](https://github.com/daniel-wells/danielwells.me/blob/main/content/posts/air-purifier-rpm-audio-signal-analysis/infer_fan_rpm.py) we can work it out ourselves!
+There are two ways I can think of:
  - Counting the time of each rotation using "high speed" video recording (effectively recreating an optical tachometer)
  - Looking for the relevant frequency in an audio recording of the fan.
 
