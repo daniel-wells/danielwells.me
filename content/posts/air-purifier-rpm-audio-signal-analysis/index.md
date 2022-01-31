@@ -6,7 +6,17 @@ draft: false
 
 I have a [Blueair Blue 3410 Air Purifier](https://www.blueair.com/gb/blue/pure-311-auto/8319.html),
 but the technical specifications are quite sparse - for example they don't specify how fast the fan spins at each of the three speed settings.
-However, with a smartphone and some [Python code](https://github.com/daniel-wells/danielwells.me/blob/main/content/posts/air-purifier-rpm-audio-signal-analysis/infer_fan_rpm.py) we can work it out ourselves!
+This can be quite important because to know how effective the purifier will be we need to know the CADR (Clean Air Delivery Rate), but it's only
+quoted for the highest speed setting which is too loud to be used continuously.
+
+The CADR divided by the volume of the room will give the ACH (Air Changes per Hour), and from that we can calculate the relative purification over
+time using the [room purge equation](https://en.wikipedia.org/wiki/Dilution_(equation)#Basic_room_purge_equation). For the plots below I've used a
+mixing factor of 1.5 to account for imperfect mixing of the air. Note that these calculations also assume no additional pollutant is being added.
+
+<img src="images/decay_linear.png" width="960" />
+<img src="images/decay_log.png" width="960" />
+
+However, with a smartphone and some [Python code](https://github.com/daniel-wells/danielwells.me/blob/main/content/posts/air-purifier-rpm-audio-signal-analysis/infer_fan_rpm.py) we can work out the fan speed ourselves!
 There are two ways I can think of:
  - Counting the time of each rotation using "high speed" video recording (effectively recreating an optical tachometer)
  - Looking for the relevant frequency in an audio recording of the fan.
@@ -81,3 +91,5 @@ Curiously the inferred rates are also slightly lower than exactly 2k and 1k rpm 
 I suspect this could be due to the AC mains frequency being slightly lower than 50 Hz at the time of recording.
 It might also be due to the air resistance / load, which would also explain why the discrepancy is higher at high speed.
 
+
+Update 31st Janurary: Added motivating text and air purge illustrations.
