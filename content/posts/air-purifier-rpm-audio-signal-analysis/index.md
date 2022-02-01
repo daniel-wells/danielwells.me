@@ -6,16 +6,22 @@ draft: false
 
 I have a [Blueair Blue 3410 Air Purifier](https://www.blueair.com/gb/blue/pure-311-auto/8319.html),
 but the technical specifications are quite sparse - for example they don't specify how fast the fan spins at each of the three speed settings.
-This can be quite important because to know how effective the purifier will be we need to know the CADR (Clean Air Delivery Rate), but it's only
-quoted for the highest speed setting which is too loud to be used continuously.
+This can be quite important because to know how effective the purifier will be we need to know the volume of air purified per unit time (aka CADR - Clean Air Delivery Rate),
+but it's only quoted for the highest speed setting which is too loud to be used continuously.
 
-The CADR divided by the volume of the room will give the ACH (Air Changes per Hour), and from that we can calculate the relative purification over
-time using the [room purge equation](https://en.wikipedia.org/wiki/Dilution_(equation)#Basic_room_purge_equation). For the plots below I've used a
-mixing factor of 1.5 to account for imperfect mixing of the air. Note that these calculations also assume no additional pollutant is being added.
+### Calculating theoretical purification
+The CADR divided by the volume of the room will give the ACH (Air Changes per Hour).
+However 1 ACH as defined by that simple division does not mean that all of the air will be purified after 1 hour.
+This is because the purified air is constantly mixing with the unpurified air so some of the air ends up going through the device multiple times.
+To calculate the relative purification over time whilst accounting for this we can use the
+[room purge equation](https://en.wikipedia.org/wiki/Dilution_(equation)#Basic_room_purge_equation).
+For the plots below I've used a mixing factor of 1.5 to account for imperfect (non-instantaneous) mixing of the air.
+Note that these calculations also assume no additional pollutant is being added.
 
 <img src="images/decay_linear.png" width="960" />
 <img src="images/decay_log.png" width="960" />
 
+### Possible fan speed inference methods
 However, with a smartphone and some [Python code](https://github.com/daniel-wells/danielwells.me/blob/main/content/posts/air-purifier-rpm-audio-signal-analysis/infer_fan_rpm.py) we can work out the fan speed ourselves!
 There are two ways I can think of:
  - Counting the time of each rotation using "high speed" video recording (effectively recreating an optical tachometer)
@@ -92,4 +98,4 @@ I suspect this could be due to the AC mains frequency being slightly lower than 
 It might also be due to the air resistance / load, which would also explain why the discrepancy is higher at high speed.
 
 
-Update 31st Janurary: Added motivating text and air purge illustrations.
+Update 31st Janurary: Added section on calculating purification. 
