@@ -1,6 +1,7 @@
 ---
 title: "Learning Languages with Zipf's Law"
 date: 2017-04-05
+author: "Daniel Wells"
 draft: false
 ---
 
