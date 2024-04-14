@@ -2,14 +2,18 @@ project:
   type: website
 
 website:
-  title: "Quartoblog"
+  title: "Daniel Wells"
+  description: "Hellooooo"
   navbar:
     right:
-      - about.qmd
+      - index.qmd
+      - posts.qmd
       - icon: github
-        href: https://github.com/
+        href: https://github.com/daniel-wells
       - icon: twitter
-        href: https://twitter.com
+        href: https://twitter.com/DanielJohnWells
+      - icon: linkedin
+        href: https://linkedin.com/in/daniejohnwells
 format:
   html:
     theme: cosmo
