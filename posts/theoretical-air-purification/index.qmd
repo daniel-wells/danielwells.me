@@ -1,6 +1,6 @@
 ---
 title: "Air purifier metrics, theoretical considerations"
-date: 2024-04-15
+date: 2024-04-16
 format:
   html:
     code-fold: true
@@ -12,6 +12,7 @@ jupyter: python3
 Each 10 μg/m^3^ of PM2.5 air pollution is associated with an 8% increase in risk of mortality.[^1]
 For context, the average PM2.5 in inner London was 8.5 μg/m^3^ in 2024.[^2]
 This is a substantial improvement compared to 2016 when the average was 12.1 μg/m^3^, however it's still somewhat above the WHO limit of 5 μg/m^3^.[^3]
+It's also increasingly recognised that cleaner air can benefit health by reducing transmission of airbone pathogens.[^4]
 
 One way to reduce your exposure to pollution is to use an air purifier inside your home.
 But how can you evaluate the effectiveness of a personal air purifier?
@@ -25,13 +26,15 @@ What is this exactly and how can you use it to calculate the theoretically expec
 
 [^3]: WHO global air quality guidelines 2021 [who.int](https://www.who.int/publications/i/item/9789240034228)
 
+[^4]: Indoor airborne risk assessment in the context of SARS-CoV-2 [who.int](https://iris.who.int/handle/10665/376346)
+
 ## Determining CADR
 
 Firstly let's look at what exactly CADR is, how it is measured, and its potential limitations.
 
 CADR is the rate at which air is cleaned, measured in cubic feet per minute (CFM) or cubic meters per hour (m^3^/h).
 
-CADR can be measured according to the [ANSI/AHAM AC-1-2020](https://webstore.ansi.org/standards/aham/ansiahamac2020) standard.
+CADR can be measured according to the ANSI/AHAM AC-1-2020 standard.[^5]^,^[^6]
 In this procedure a climate controlled test chamber of 1008 ft^3^ (28.3 m^3^) is filled with one of the three pollutants: smoke, dust, or pollen.
 These pollutants have different size ranges: 0.09 to 1.0 μm for smoke, 0.5 to 3.0 μm for dust, and 0.5 to 11.0 μm for pollen.
 There is a ceiling fan for initial mixing of the pollutant and a wall recirculation fan to circulate the air during the test.
@@ -41,6 +44,9 @@ The decay in that case is due to both the air purifier _and_ natural decay e.g. 
 So to calculate the decay only due to the purifier the experiment is repeated without the air purifier to measure the natural decay (due to deposition), which can then be subtracted from the total decay.
 The outcome of such an experiment might look something like this for an air purifier with a CADR of 300 CFM:
 
+[^5]: ANSI/AHAM AC-1-2020 [ansi.org](https://webstore.ansi.org/standards/aham/ansiahamac2020)
+
+[^6]: Frequently Asked Questions about Testing of Portable Air Cleaners [ahamverifide.org](https://ahamverifide.org/wp-content/uploads/2020/06/Air-Cleaner-Performance-FAQs.pdf)
 
 ```{python}
 import requests
@@ -191,7 +197,7 @@ p
 
 ## CADR vs pollution reduction
 
-What's the relationship between CADR and relative change in pollution over time?
+What's the relationship between CADR and relative levels of pollution over time?
 
 The CADR divided by the volume of the room will give the ACH (Air Changes per Hour).
 However, 1 ACH as defined by that simple division does not mean that all of the air will be purified after 1 hour.
@@ -259,7 +265,9 @@ However this equation is a simplification that, for example, assumes no addition
 
 Where does this equation come from?
 
-We can define a mass balance equation:
+We can define a mass balance equation[^7]:
+
+[^7]: What Is an Effective Portable Air Cleaning Device? A Review. doi: [10.1080/15459620600580129](http://dx.doi.org/10.1080/15459620600580129) [alternative link](https://web.archive.org/web/20150610222239/http://centerforhealthyhousing.org/Portals/0/Contents/Article0646.pdf)
 
 $$
 \frac{dC_t}{dt} = \frac{S}{V} + \lambda_v (PC_{\text{amb}} - C_t) - (\lambda_p + \lambda_d) C_t
@@ -360,7 +368,7 @@ R &= \frac{1}{\frac{\lambda_p}{(\lambda_v + \lambda_d)} + 1}\\
 \end{split}
 $$
 
-So if the purification rate $\lambda_d$ is large compared to the combined effects of ventilation and deposition $(\lambda_v + \lambda_d)$ then the relative pollution is lower and vice versa.
+So if the purification rate $\lambda_p$ is large compared to the combined effects of ventilation and deposition $(\lambda_v + \lambda_d)$ then the relative pollution is lower and vice versa.
 
 Visually the relationship between desired steady state level of pollution vs ACH:
 ```{python}
@@ -387,7 +395,7 @@ p = pn.ggplot(pd.DataFrame(data={"x": np.linspace(0.05, 0.9, 100),
 display(p)
 ```
 
-For smoke to get from 20% steady state levels down to 10% requires a bit more than a doubling of ACH.
+For smoke, to get from 20% steady state levels down to 10% requires a bit more than a doubling of ACH.
 
 ### How does this relate to CADR and room size?
 
@@ -470,19 +478,20 @@ $$
 
 I.e. more than double.
 Further, this is the value for smoke so pollen with its higher natural deposition rate would fare even worse.
-However, it may be that the natural ventilation is somewhat less than 1 ACH and perhaps the linear fan speed to airflow correspondence I assumed is not quite correct due to the barrier of the purifier. Both of which could result in an improved relative reduction.
+However, it may be that the natural ventilation is somewhat less than 1 ACH and perhaps the linear fan speed to airflow correspondence I assumed is not quite correct due to the barrier of the purifier's filter.
+Both of which could result in an improved relative reduction.
 
 The many factors that these simple models don't account for and the uncertainties involved in the estimated constants means that they are really just rough guides to what one might expect in reality.
 
 For example, while we've considered steady state levels, which means we can mostly ignore mixing factors, it takes time to reach steady state levels and life is not constant.
-Pollution may spike during cooking or cleaning, or opening the window, or during rush hour traffic, resetting the clock until steady state is achieved.
+Pollution may spike during cooking or cleaning, or opening the window, or during rush hour traffic - resetting the clock until steady state is achieved.
 Perhaps a large fraction of the time is not spent in steady state conditions.
 It could be that at steady state a gradient across a room is still present due to the location of the pollution and purifier.
 Further, the deposition rates and CADR likely vary with temperature and humidity.
 The filter performance will also degrade over time.
 Even the room volume we used is an approximation due to cupboards, appliances (e.g. fridge), and internal walls that reduce the effective internal volume.
 
-We could start to quantify this uncertianty by specifying a distribution for each of the input variables and using those to generate a distribution of plausible values of the relative reduction:
+We could start to quantify this uncertainty by specifying a distribution for each of the input variables and using those to generate a distribution of plausible values of the relative reduction:
 
 ```{python}
 n = 20_000
