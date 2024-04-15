@@ -1,8 +1,30 @@
 ---
-layout: page
-title: Home
+title: "Daniel Wells"
+description: "Molecular biologist turned statistician"
+about:
+  template: solana
+  links:
+    - icon: github
+      href: https://github.com/daniel-wells
+    - icon: twitter
+      href: https://twitter.com/DanielJohnWells
+    - icon: linkedin
+      href: https://www.linkedin.com/in/danieljohnwells/
+    - icon: wikipedia
+      href: https://en.wikipedia.org/wiki/User:D_Wells
+    - icon: envelope-at
+      href: mailto:email@danielwells.me
+    - text: ORCiD
+      href: https://orcid.org/0000-0002-2007-8978
+    - text: Keybase
+      href: https://keybase.io/danielwells
+    - text: Google Scholar
+      href: https://scholar.google.com/citations?user=ysh9R0MAAAAJ
+    - text: last.fm
+      href: http://www.last.fm/user/dannywells
+    - text: Spotify
+      href: http://open.spotify.com/user/1111629369
 ---
-
 
 I'm currently working at [Genomics plc](https://www.genomicsplc.com/precision-health/) developing statistical methods that use genetic data to estimate an individual's risk of various diseases.
 
@@ -10,6 +32,7 @@ Previously I completed a PhD in functional genomics at the University of Oxford,
 Prior to that I was an experimental molecular biologist with experience in a range of biomedical fields including vaccinology/immunology, developmental biology, genome engineering, and oncology.
 
 Some specific projects I've worked on:
+
  - Creating an atlas of which genes are turned on in which cell types and at what stage during meiosis in mice. ([app](http://www.stats.ox.ac.uk/~wells/testisAtlas.html), [paper](https://elifesciences.org/articles/43966))
  - Characterisation of a specific gene that's required for successful meiosis in male mice. ([paper](https://doi.org/d5nm))
  - Creation and preclinical testing of vaccines for Ebola and MERS-Coronavirus (which went on to sucessfully complete phase I clinical trials in humans). ([paper](https://doi.org/10.1038/s41541-017-0029-1), [clinical trial paper](https://doi.org/ggtxgp))

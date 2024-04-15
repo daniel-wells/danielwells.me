@@ -1,0 +1,26 @@
+project:
+  type: website
+
+website:
+  title: "Daniel Wells"
+  description: "Molecular biologist turned statistician"
+  page-navigation: true
+  navbar:
+    logo: "favicon.ico"
+    right:
+      - text: About
+        href: index.qmd
+      - posts.qmd
+      - icon: github
+        href: https://github.com/daniel-wells
+      - icon: twitter
+        href: https://twitter.com/DanielJohnWells
+      - icon: linkedin
+        href: https://linkedin.com/in/danieljohnwells
+format:
+  html:
+    theme: simplex
+    css: styles.css
+
+execute:
+  freeze: auto
