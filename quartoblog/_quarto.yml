@@ -4,9 +4,12 @@ project:
 website:
   title: "Daniel Wells"
   description: "Molecular biologist turned statistician"
+  page-navigation: true
   navbar:
+    logo: "favicon.ico"
     right:
-      - index.qmd
+      - text: About
+        href: index.qmd
       - posts.qmd
       - icon: github
         href: https://github.com/daniel-wells
