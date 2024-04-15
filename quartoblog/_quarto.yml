@@ -3,7 +3,7 @@ project:
 
 website:
   title: "Daniel Wells"
-  description: "Hellooooo"
+  description: "Molecular biologist turned statistician"
   navbar:
     right:
       - index.qmd

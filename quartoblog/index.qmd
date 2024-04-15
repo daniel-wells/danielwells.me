@@ -1,5 +1,6 @@
 ---
-title: "About"
+title: "Daniel Wells"
+description: "Molecular biologist turned statistician"
 about:
   template: solana
   links:
@@ -9,6 +10,20 @@ about:
       href: https://twitter.com/DanielJohnWells
     - icon: linkedin
       href: https://www.linkedin.com/in/danieljohnwells/
+    - icon: wikipedia
+      href: https://en.wikipedia.org/wiki/User:D_Wells
+    - icon: envelope-at
+      href: mailto:email@danielwells.me
+    - text: ORCiD
+      href: https://orcid.org/0000-0002-2007-8978
+    - text: Keybase
+      href: https://keybase.io/danielwells
+    - text: Google Scholar
+      href: https://scholar.google.com/citations?user=ysh9R0MAAAAJ
+    - text: last.fm
+      href: http://www.last.fm/user/dannywells
+    - text: Spotify
+      href: http://open.spotify.com/user/1111629369
 ---
 
 I'm currently working at [Genomics plc](https://www.genomicsplc.com/precision-health/) developing statistical methods that use genetic data to estimate an individual's risk of various diseases.
