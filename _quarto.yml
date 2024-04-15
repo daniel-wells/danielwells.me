@@ -19,8 +19,8 @@ website:
         href: https://linkedin.com/in/daniejohnwells
 format:
   html:
-    theme: cosmo
+    theme: simplex
     css: styles.css
 
-
-
+execute:
+  freeze: auto
