@@ -1,6 +1,6 @@
 ---
 title: "Backups with Restic: understanding repository structure and a comparison with Git"
-date: 2024-05-27
+date: 2025-05-27
 draft: false
 format:
   html:
