@@ -419,7 +419,7 @@ To summarise so far, there are snapshots that point to tree blobs that point to 
 The tree and data blobs are contained in pack files, and the index file maps the blobs to the pack files.
 
 
-```mermaid
+```{mermaid}
 graph TD
     subgraph Restic Repository Structure
         direction LR
@@ -478,7 +478,7 @@ graph TD
 
 Things are a bit more complicated when you add in the links to the pack files and the index files.
 
-```mermaid
+```{mermaid}
 graph TD
     subgraph Restic Repository Structure
         direction LR
