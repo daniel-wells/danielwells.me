@@ -2,6 +2,10 @@
 title: "Backups with Restic: understanding repository structure and a comparison with Git"
 date: 2024-05-27
 draft: false
+format:
+  html:
+    mermaid:
+      theme: neutral
 ---
 
 ## Why Restic? Justified complexity
