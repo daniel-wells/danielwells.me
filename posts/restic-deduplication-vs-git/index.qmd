@@ -1,0 +1,1284 @@
+---
+title: "Backups with Restic: understanding repository structure and a comparison with Git"
+date: 2024-05-27
+draft: false
+format:
+  html:
+    mermaid:
+      theme: neutral
+---
+
+## Why Restic? Justified complexity
+
+In designing a system to be safe, it's often appealing to use a simpler system.
+In a simpler system there's less to go wrong.
+It's also easier to reason about the consequences of your actions in a simpler system and so certain classes of mistakes are less likely.
+In a more complex system, additional effort in understanding the system and maintenance is often required to a) prevent things going wrong b) notice that things have gone wrong, and c) recover when they do go wrong.
+However, a broader consideration of safety/security often motivates some additional complexity.
+
+### The simplest possible solution
+Consider a backup system where you periodically copy and paste all files onto an external hard drive.
+In this system the process is simple and easy to understand so if you're paying attention should be relatively difficult to make a mistake.
+However there's little protection from simple user errors like overwriting the primary data with the backup by copying in the wrong direction.
+Additionally this process is slow for typical backup sizes, which probably means that the backup is not done as often as it should be.
+It's likely to be prohibitively slow for offsite backups over the network e.g. by uploading to the cloud.
+
+### Adding speed & automation
+Faster backups are possible by using a tool like `rsync` which only copies the *changes*.
+However, this system is more complex and so there are more ways to make mistakes.
+For example by a misconfiguration of one of the many parameters: `rsync -avhX --progress --delete /source /destination`, which are not exactly out-of-the-box obvious.
+Additionally, the command as written uses file modification times to determine which files to copy, which could potentially lead to some changes not being backed up (there is a `--checksum` option, but it will be slower).
+On the other hand, the direction of the sync is pre-configured, so it's harder to accidentally overwrite the primary data with the backup data than in a manual copy-and-paste system.
+So we have replaced an ongoing risk of user error with a one off upfront risk of misconfiguration.
+However, there's still a key missing feature: this approach only keeps the most recent version of a file (unless you make multiple backups at different time points, but that would take up a large amount of space). So any accidental deletions that happened prior to the last backup would not be recoverable.
+
+### Enabling multiple snapshots via de-duplication
+To enable multiple backups at different time points ("snapshots") without unrealistic storage requirements we need a system that de-duplicates data.
+
+`Restic` is a dedicated backup software that has de-duplication, which it achieves by using content addressable storage.
+In this approach the data's address (~ID/name) is a hash of the data itself.
+Further, Restic stores data in chunks rather than the original files, which means that data can be de-duplicated *within* files as well as across files.
+The chunk length is defined by the data itself using a process called content defined chunking - where a rolling hash is computed in order to determine where to start a new chunk.
+This means that if you add or remove data within a chunk the following chunk boundaries will not be affected.
+
+### Completing the CIA triad: adding confidentiality and integrity
+Restic also improves data security in aspects other than simply availability: confidentiality (via built in encryption, which itself may help encourage offsite cloud storage), and integrity (via the integrity checks utilising the content addressable storage) - covering all three aspects of the 'CIA triad'.
+
+The open source nature also means that if something goes wrong, we have a reasonable possibility of recovery ourselves compared to a proprietary system such as Google Drive where a single user subscription doesn't come with much in the way of customer support or technical documentation.
+
+There is also a rust implementation of Restic called rustic that has support for even more features: cold storage backup (e.g. AWS Glacier, $1.8/TB/mth = £17.5/yr), append only mode, larger pack sizes, and can apparently be used as a drop in replacement for Restic. 
+
+However, with all those additional features comes complexity, in both the user interface and the data structure in which the files are stored and so reasoning about how to set up and use this software is much more involved. To help (myself) with that I wrote this post which is a deep dive into the internals of the Restic repository format -- in particular how it supports deduplication, and a comparison with Git.
+
+## Understanding the Restic repository structure
+
+You can set up a Restic repository with `restic init --repo restic_test_repo` and then inspect the contents of the directory.
+```bash
+$ tree restic_test_repo
+.restic_test_repo
+├── config
+├── data
+│   ├── 00
+│   ├── 01
+│   ├── 02
+│   [...]
+│   ├── fd
+│   ├── fe
+│   └── ff
+├── index
+├── keys
+│   └── b4fd7a087def14c048abe2996f48d515cfb5bc5fb988200181d0d8302bb6c3f8
+├── locks
+└── snapshots
+```
+Currently there's only a single file, the key file.
+
+Let's create some test data, back it up, and see how the contents of the repository change:
+```bash
+$ mkdir important_folder
+$ echo 'Hello world!' > important_folder/test.txt
+$ restic backup important_folder -r restic_test_repo
+$ tree restic_test_repo
+.restic_test_repo
+├── config
+├── data
+│   ├── 00
+│   [...]
+│   ├── c8
+│   │   └── c817b6951c37e631607d9467ca17548b30f13b525e9ccaa8d4cbc696a85bf470
+│   ├── c9
+│   [...]
+│   ├── e1
+│   │   └── e1b28c8ce06286b4b7f2438a90dc1d281fb3441bb5ca8a500e7db8873133518d
+│   ├── e2
+│   [...]
+│   └── ff
+├── index
+│   └── fc3fbcd6ffe98d1950a989b28f8f5e648ccdd405ed01f8736f1b93c929d35c65
+├── keys
+│   └── b4fd7a087def14c048abe2996f48d515cfb5bc5fb988200181d0d8302bb6c3f8
+├── locks
+└── snapshots
+    └── 03e570717e741d7cb407ffbe2084ca748916226853d0706bc75d07dd51867ee8
+```
+There's two new data files, a new index file, and a new snapshot file.
+Let's start by inspecting the snapshot file:
+
+```bash
+$ restic -r restic_test_repo cat snapshot 03e570717e741d7cb407ffbe2084ca748916226853d0706bc75d07dd51867ee8 | jq
+```
+
+```json
+{
+  "time": "2024-08-08T20:23:11.114029+01:00",
+  "tree": "617091321d572e4ff0ab2e50c858bb38f90547d50d538a7d9a0088e4c23336b3",
+  "paths": [
+    "/Users/d.wells/restic_test2/important_folder"
+  ],
+  "hostname": "Daniels-MBP-7.broadband",
+  "username": "d.wells",
+  "uid": 501,
+  "gid": 20,
+  "program_version": "restic 0.16.4"
+}
+```
+
+It points to a tree (~directory) blob (note the blob hash does _not_ match any of the data files, hold on...):
+```bash
+$ restic -r restic_test_repo cat blob 617091321d572e4ff0ab2e50c858bb38f90547d50d538a7d9a0088e4c23336b3 | jq
+```
+
+```json
+{{
+  "nodes": [
+    {
+      "name": "important_folder",
+      "type": "dir",
+      "mode": 2147484141,
+      "mtime": "2024-08-08T20:23:07.173863907+01:00",
+      "atime": "2024-08-08T20:23:07.173863907+01:00",
+      "ctime": "2024-08-08T20:23:07.173863907+01:00",
+      "uid": 501,
+      "gid": 20,
+      "user": "d.wells",
+      "group": "staff",
+      "inode": 160572614,
+      "device_id": 16777220,
+      "content": null,
+      "subtree": "5853b42cb89e70d8b70c0cc7de04834f9327df63335c6573a7f51fccb27e834b"
+    }
+  ]
+}
+```
+
+which itself points to this subtree:
+```bash
+$ restic -r restic_test_repo cat blob 5853b42cb89e70d8b70c0cc7de04834f9327df63335c6573a7f51fccb27e834b | jq
+```
+```json
+{
+  "nodes": [
+    {
+      "name": "test.txt",
+      "type": "file",
+      "mode": 420,
+      "mtime": "2024-08-08T20:23:07.174039218+01:00",
+      "atime": "2024-08-08T20:23:07.174039218+01:00",
+      "ctime": "2024-08-08T20:23:07.174039218+01:00",
+      "uid": 501,
+      "gid": 20,
+      "user": "d.wells",
+      "group": "staff",
+      "inode": 160572615,
+      "device_id": 16777220,
+      "size": 13,
+      "links": 1,
+      "content": [
+        "0ba904eae8773b70c75333db4de2f3ac45a8ad4ddba1b242f0b3cfc199391dd8"
+      ]
+    }
+  ]
+}
+```
+
+which itself lists a single file metadata and points to the blob which contains the actual data:
+```bash
+$ restic -r restic_test_repo cat blob 0ba904eae8773b70c75333db4de2f3ac45a8ad4ddba1b242f0b3cfc199391dd8
+Hello world!
+```
+
+There is also an index blob which tells us which blobs are contained within which pack files (which is what we see listed in the data folder, each of which can contain multiple blobs). There are separate pack files for the data and the trees:
+```bash
+$ restic -r restic_test_repo cat index fc3fbcd6ffe98d1950a989b28f8f5e648ccdd405ed01f8736f1b93c929d35c65 | jq
+```
+```json
+{{
+  "packs": [
+    {
+      "id": "c817b6951c37e631607d9467ca17548b30f13b525e9ccaa8d4cbc696a85bf470",
+      "blobs": [
+        {
+          "id": "0ba904eae8773b70c75333db4de2f3ac45a8ad4ddba1b242f0b3cfc199391dd8",
+          "type": "data",
+          "offset": 0,
+          "length": 54,
+          "uncompressed_length": 13
+        }
+      ]
+    },
+    {
+      "id": "e1b28c8ce06286b4b7f2438a90dc1d281fb3441bb5ca8a500e7db8873133518d",
+      "blobs": [
+        {
+          "id": "5853b42cb89e70d8b70c0cc7de04834f9327df63335c6573a7f51fccb27e834b",
+          "type": "tree",
+          "offset": 0,
+          "length": 273,
+          "uncompressed_length": 385
+        },
+        {
+          "id": "617091321d572e4ff0ab2e50c858bb38f90547d50d538a7d9a0088e4c23336b3",
+          "type": "tree",
+          "offset": 273,
+          "length": 275,
+          "uncompressed_length": 392
+        }
+      ]
+    }
+  ]
+}
+```
+
+We can create a new snapshot with `restic backup important_folder -r restic_test_repo`.
+The only thing that has changed in the repository is the new snapshot file:
+```bash
+.restic_test_repo
+├── config
+├── data
+│   ├── 00
+│   [...]
+│   ├── c8
+│   │   └── c817b6951c37e631607d9467ca17548b30f13b525e9ccaa8d4cbc696a85bf470
+│   ├── c9
+│   [...]
+│   ├── e1
+│   │   └── e1b28c8ce06286b4b7f2438a90dc1d281fb3441bb5ca8a500e7db8873133518d
+│   ├── e2
+│   [...]
+│   └── ff
+├── index
+│   └── fc3fbcd6ffe98d1950a989b28f8f5e648ccdd405ed01f8736f1b93c929d35c65
+├── keys
+│   └── b4fd7a087def14c048abe2996f48d515cfb5bc5fb988200181d0d8302bb6c3f8
+├── locks
+└── snapshots
+    ├── 03e570717e741d7cb407ffbe2084ca748916226853d0706bc75d07dd51867ee8
+    └── 9e12995c6b7171fa884efb6ec99d56135f3ecc0d12a34394e19edc437ab46766
+```
+
+The new snapshot points to the previous snapshot as the parent, and the tree blob is the same we saw before as restic has recognised that nothing has changed so it hasn't stored any new data.
+
+```bash
+$ restic -r restic_test_repo cat snapshot 9e12995c6b7171fa884efb6ec99d56135f3ecc0d12a34394e19edc437ab46766 | jq
+```
+```json
+{
+  "time": "2024-08-08T20:27:12.921736+01:00",
+  "parent": "03e570717e741d7cb407ffbe2084ca748916226853d0706bc75d07dd51867ee8",
+  "tree": "617091321d572e4ff0ab2e50c858bb38f90547d50d538a7d9a0088e4c23336b3",
+  "paths": [
+    "/Users/d.wells/restic_test2/important_folder"
+  ],
+  "hostname": "Daniels-MBP-7.broadband",
+  "username": "d.wells",
+  "uid": 501,
+  "gid": 20,
+  "program_version": "restic 0.16.4"
+}
+```
+
+Now let's add some more data, this time by simply duplicating the already existing file:
+
+```bash
+$ cp important_folder/test.txt important_folder/test2.txt
+$ restic backup important_folder -r restic_test_repo
+$ tree restic_test_repo
+.restic_test_repo
+├── config
+├── data
+│   ├── 00
+│   [...]
+│   ├── 85
+│   ├── 86
+│   │   └── 863c11ebda8f920acfc12808af5512b61c714acec69012bc71d335a8e5685b1c
+│   ├── 87
+│   [...]
+│   ├── c8
+│   │   └── c817b6951c37e631607d9467ca17548b30f13b525e9ccaa8d4cbc696a85bf470
+│   ├── c9
+│   [...]
+│   ├── e1
+│   │   └── e1b28c8ce06286b4b7f2438a90dc1d281fb3441bb5ca8a500e7db8873133518d
+│   ├── e2
+│   [...]
+│   └── ff
+├── index
+│   ├── 03d3d0ed20254ce7c19199ea186e7baa470f1a7347e561dbbcf97002c3096e04
+│   └── fc3fbcd6ffe98d1950a989b28f8f5e648ccdd405ed01f8736f1b93c929d35c65
+├── keys
+│   └── b4fd7a087def14c048abe2996f48d515cfb5bc5fb988200181d0d8302bb6c3f8
+├── locks
+└── snapshots
+    ├── 03e570717e741d7cb407ffbe2084ca748916226853d0706bc75d07dd51867ee8
+    ├── 9e12995c6b7171fa884efb6ec99d56135f3ecc0d12a34394e19edc437ab46766
+    └── e248b09e242f104854522e8ea6423bbb009003677a584e92cd4c923a0b24b795
+```
+Now we have both a new snapshot, a new index file, and a new pack file.
+Looking at the new snapshot:
+
+```bash
+$ restic -r restic_test_repo cat snapshot e248b09e242f104854522e8ea6423bbb009003677a584e92cd4c923a0b24b795 | jq
+```
+
+```json
+{
+  "time": "2024-08-08T20:31:46.079628+01:00",
+  "parent": "9e12995c6b7171fa884efb6ec99d56135f3ecc0d12a34394e19edc437ab46766",
+  "tree": "b7708a32ac5fc4e805046ba8806ba46416e65f2af09574651bea026f6d19f4b7",
+  "paths": [
+    "/Users/d.wells/restic_test2/important_folder"
+  ],
+  "hostname": "Daniels-MBP-7.broadband",
+  "username": "d.wells",
+  "uid": 501,
+  "gid": 20,
+  "program_version": "restic 0.16.4"
+}
+```
+
+The snapshot again points to the previous snapshot as the parent.
+There is a new tree blob because the folder has been modified by the addition of the new file.
+
+```bash
+$ restic -r restic_test_repo cat blob b7708a32ac5fc4e805046ba8806ba46416e65f2af09574651bea026f6d19f4b7 | jq
+```
+
+```json
+{
+  "nodes": [
+    {
+      "name": "important_folder",
+      "type": "dir",
+      "mode": 2147484141,
+      "mtime": "2024-08-08T20:31:42.043398804+01:00",
+      "atime": "2024-08-08T20:31:42.043398804+01:00",
+      "ctime": "2024-08-08T20:31:42.043398804+01:00",
+      "uid": 501,
+      "gid": 20,
+      "user": "d.wells",
+      "group": "staff",
+      "inode": 160572614,
+      "device_id": 16777220,
+      "content": null,
+      "subtree": "f1a79eeb2069ecb2da303f9e57c0a18805f42408847c55bec5cdd725dfde47b5"
+    }
+  ]
+}
+```
+
+Following the subtree we see this directory now contains two files:
+
+```bash
+$ restic -r restic_test_repo cat blob f1a79eeb2069ecb2da303f9e57c0a18805f42408847c55bec5cdd725dfde47b5 | jq
+```
+
+```json
+{
+  "nodes": [
+    {
+      "name": "test.txt",
+      "type": "file",
+      "mode": 420,
+      "mtime": "2024-08-08T20:23:07.174039218+01:00",
+      "atime": "2024-08-08T20:23:07.174039218+01:00",
+      "ctime": "2024-08-08T20:23:07.174039218+01:00",
+      "uid": 501,
+      "gid": 20,
+      "user": "d.wells",
+      "group": "staff",
+      "inode": 160572615,
+      "device_id": 16777220,
+      "size": 13,
+      "links": 1,
+      "content": [
+        "0ba904eae8773b70c75333db4de2f3ac45a8ad4ddba1b242f0b3cfc199391dd8"
+      ]
+    },
+    {
+      "name": "test2.txt",
+      "type": "file",
+      "mode": 420,
+      "mtime": "2024-08-08T20:31:42.044027259+01:00",
+      "atime": "2024-08-08T20:31:42.044027259+01:00",
+      "ctime": "2024-08-08T20:31:42.044159909+01:00",
+      "uid": 501,
+      "gid": 20,
+      "user": "d.wells",
+      "group": "staff",
+      "inode": 160573902,
+      "device_id": 16777220,
+      "size": 13,
+      "links": 1,
+      "content": [
+        "0ba904eae8773b70c75333db4de2f3ac45a8ad4ddba1b242f0b3cfc199391dd8"
+      ]
+    }
+  ]
+}
+```
+
+But note that the content hash is the same, as restic has recognised that the content of the file is the same and has not stored it again.
+
+To summarise so far, there are snapshots that point to tree blobs that point to data blobs.
+The tree and data blobs are contained in pack files, and the index file maps the blobs to the pack files.
+
+
+```{mermaid}
+graph TD
+    subgraph Restic Repository Structure
+        direction LR
+
+        subgraph SnapshotsArea [Snapshots]
+            direction TB
+            SN1["Snapshot 1 (03e57...)"]
+            SN2["Snapshot 2 (9e129...)"]
+            SN3["Snapshot 3 (e248b...)"]
+        end
+
+        subgraph TreeBlobsArea ["Tree Blobs (Metadata)"]
+            direction TB
+            Tree_S1_root["Root Tree for SN1 & SN2 (61709...)"]
+            Tree_S1_sub["SubTree for SN1 & SN2 <br/> important_folder (5853b...)"]
+            Tree_S3_root["Root Tree for SN3 (b7708...)"]
+            Tree_S3_sub["SubTree for SN3 <br/> important_folder (f1a79...)"]
+        end
+
+        subgraph DataBlobsArea ["Data Blobs (File Content)"]
+            direction TB
+            Data_Hello["'Hello world!' <br/> (0ba90...)"]
+        end
+
+        %% Snapshot to Root Tree relationships
+        SN1 --> Tree_S1_root
+        SN2 --> Tree_S1_root 
+        %% Snapshot 2 reuses Tree from Snapshot 1
+        SN3 --> Tree_S3_root
+
+        %% Tree hierarchy
+        Tree_S1_root --> Tree_S1_sub
+        Tree_S3_root --> Tree_S3_sub
+
+        %% Tree to Data Blob relationships
+        Tree_S1_sub -- "test.txt" --> Data_Hello
+        Tree_S3_sub -- "test.txt" --> Data_Hello
+        Tree_S3_sub -- "test2.txt (copy)" --> Data_Hello
+         %% Deduplication: test2.txt uses same data blob
+    end
+
+    classDef snapshot fill:#c9ffc9,stroke:#333,stroke-width:2px;
+    classDef treeblob fill:#cfe2ff,stroke:#333,stroke-width:2px;
+    classDef datablob fill:#fff2cc,stroke:#333,stroke-width:2px;
+    classDef packfile fill:#ffcccc,stroke:#333,stroke-width:2px;
+    classDef indexfile fill:#e6ccff,stroke:#333,stroke-width:2px;
+
+    class SN1,SN2,SN3 snapshot;
+    class Tree_S1_root,Tree_S1_sub,Tree_S3_root,Tree_S3_sub treeblob;
+    class Data_Hello datablob;
+    class Pack_Tree1,Pack_Data1,Pack_Tree3 packfile;
+    class Index1,Index3 indexfile;
+
+    linkStyle default interpolate basis
+```
+
+Things are a bit more complicated when you add in the links to the pack files and the index files.
+
+```{mermaid}
+graph TD
+    subgraph Restic Repository Structure
+        direction LR
+
+        subgraph SnapshotsArea [Snapshots]
+            direction TB
+            SN1["Snapshot 1 (03e57...)"]
+            SN2["Snapshot 2 (9e129...)"]
+            SN3["Snapshot 3 (e248b...)"]
+        end
+
+        subgraph TreeBlobsArea ["Tree Blobs (Metadata)"]
+            direction TB
+            Tree_S1_root["Root Tree for SN1 & SN2 (61709...)"]
+            Tree_S1_sub["SubTree for SN1 & SN2 <br/> important_folder (5853b...)"]
+            Tree_S3_root["Root Tree for SN3 (b7708...)"]
+            Tree_S3_sub["SubTree for SN3 <br/> important_folder (f1a79...)"]
+        end
+
+        subgraph DataBlobsArea ["Data Blobs (File Content)"]
+            direction TB
+            Data_Hello["'Hello world!' <br/> (0ba90...)"]
+        end
+
+        subgraph PackfilesArea ["Packfiles (Storage)"]
+            direction TB
+            Pack_Tree1["Tree Pack 1 (e1b28...)"]
+            Pack_Data1["Data Pack 1 (c817b...)"]
+            Pack_Tree3["Tree Pack 2 (863c1...)"]
+        end
+
+        subgraph IndexFilesArea [Index Files]
+            direction TB
+            Index1["Index (fc3fb...) <br/> Initially tracks Pack_Tree1, Pack_Data1"]
+            Index3["Index (03d3d...) <br/> Tracks Pack_Tree1, Pack_Data1, Pack_Tree3"]
+        end
+
+        %% Snapshot to Root Tree relationships
+        SN1 --> Tree_S1_root
+        SN2 --> Tree_S1_root 
+        %% Snapshot 2 reuses Tree from Snapshot 1
+        SN3 --> Tree_S3_root
+
+        %% Tree hierarchy
+        Tree_S1_root --> Tree_S1_sub
+        Tree_S3_root --> Tree_S3_sub
+
+        %% Tree to Data Blob relationships
+        Tree_S1_sub -- "test.txt" --> Data_Hello
+        Tree_S3_sub -- "test.txt" --> Data_Hello
+        Tree_S3_sub -- "test2.txt (copy)" --> Data_Hello
+         %% Deduplication: test2.txt uses same data blob
+
+        %% Blobs to Packfile relationships
+        Tree_S1_root --> Pack_Tree1
+        Tree_S1_sub  --> Pack_Tree1
+        Data_Hello   --> Pack_Data1
+        Tree_S3_root --> Pack_Tree3 
+        %% New tree blobs go into a new packfile
+        Tree_S3_sub  --> Pack_Tree3
+
+        %% Index to Packfile relationships
+        Index1 --> Pack_Tree1
+        Index1 --> Pack_Data1
+        Index3 --> Pack_Tree1
+        Index3 --> Pack_Data1
+        Index3 --> Pack_Tree3
+    end
+
+    classDef snapshot fill:#c9ffc9,stroke:#333,stroke-width:2px;
+    classDef treeblob fill:#cfe2ff,stroke:#333,stroke-width:2px;
+    classDef datablob fill:#fff2cc,stroke:#333,stroke-width:2px;
+    classDef packfile fill:#ffcccc,stroke:#333,stroke-width:2px;
+    classDef indexfile fill:#e6ccff,stroke:#333,stroke-width:2px;
+
+    class SN1,SN2,SN3 snapshot;
+    class Tree_S1_root,Tree_S1_sub,Tree_S3_root,Tree_S3_sub treeblob;
+    class Data_Hello datablob;
+    class Pack_Tree1,Pack_Data1,Pack_Tree3 packfile;
+    class Index1,Index3 indexfile;
+
+    linkStyle default interpolate basis
+```
+
+## Git
+The language and structure of the restic repository is very similar to that of git, which also has repositories, blobs, trees, and packfiles.
+
+```bash
+$ git init git_test_repo
+$ cd git_test_repo
+$ echo 'Hello world!' > test.txt
+$ git add test.txt
+$ git commit -am 'Initial commit'
+$ tree .git
+.git
+├── COMMIT_EDITMSG
+├── HEAD
+├── config
+├── description
+├── hooks
+│   [...]
+├── index
+├── info
+│   └── exclude
+├── logs
+│   ├── HEAD
+│   └── refs
+│       └── heads
+│           └── master
+├── objects
+│   ├── 62
+│   │   └── e56c460357fe6bcf213cbb17ab1e44dd80e72f
+│   ├── a0
+│   │   └── b0b9e615e9e433eb5f11859e9feac4564c58c5
+│   ├── cd
+│   │   └── 0875583aabe89ee197ea133980a9085d08e497
+│   ├── info
+│   └── pack
+└── refs
+    ├── heads
+    │   └── master
+    └── tags
+```
+The slight differences being that the hash is split across the directory and file name and the hashes are the SHA1 rather than SHA256 (though this is now a configurable option).
+In Git the repository is stored locally whereas in restic it is typically stored remotely.
+
+The master branch points to the latest commit blob:
+```bash
+$ cat .git/refs/heads/master
+62e56c460357fe6bcf213cbb17ab1e44dd80e72f
+```
+
+Just like a restic snapshot this contains a date, author/user, and a hash of the tree:
+```bash
+$ git cat-file -p 62e56c460357fe6bcf213cbb17ab1e44dd80e72f
+tree a0b0b9e615e9e433eb5f11859e9feac4564c58c5
+author daniel-wells <daniel-wells@users.noreply.github.com> 1723395113 +0100
+committer daniel-wells <daniel-wells@users.noreply.github.com> 1723395113 +0100
+gpgsig -----BEGIN PGP SIGNATURE-----
+
+ iQIzBAABCAAdFiEE70NaUx+nuKYpYXRp484tQ4TmG18FAma47CkACgkQ484tQ4Tm
+ G190XA//ZVEqh3r78p2Mw/a0uVlHxhqJQJCQegdnX0HmDS7YbE244xOJ9L4LQxcE
+ X6WI5zCZvdrxKVwRaBeVRmVVLwRNtTciXPSyPyR2YJ3c7MkXUQEmReSqqstEHpr4
+ 34WLBOr5Xbi1OUrcKqkyWs8G7VEtnMM25xJY+dugMsJFwlyU8MSsuOGViWfDxA+g
+ F+JXYDxNVRItrkoHV+y5TYI2tLfZb7cjuqT44j6tWaOg9aWpur+7uKviZFVygG0n
+ UJgnJ4V7PZsiZrft2gvji7S/Dw9VJua14CuBIaDSTAMbYIYUnrbxdykzEneF8hVi
+ 4Pmw/pIg64FAyQEIG46WFpbSpZ7K9880n4xv6oLRcqVOglLBUR7UzsjpzzvzwsOb
+ q7cD+C6VZbzI8q/Xk6lsnxwKbK1dzFaqh4kG7oNv23s/rLxYQMwpdw2a4gyvnxkO
+ OMKNan1T6uZb0GDmvi41hcrOsUphY8GitS4/fgaWzdiVc9z6tR58Jom+NHzfN3mD
+ 47TX8rl/VKdcIqO3V9ouJooj/NOS4DZkUSP3tCxzcR1ERT+9CuDZZplddtFCpj++
+ fYGxlHSVnLam35ogVRCOxuEle1JYCFva1d7AvSS/VV70xTJeJvhiVY8/Kf98gcCb
+ XJphY89ZJ8VR6IVZ3cMpv/panYTBPqKoqF2ak3ZvQgAWoS5Jtyg=
+ =KXEX
+ -----END PGP SIGNATURE-----
+
+Initial commit
+```
+
+Looking at the tree blob we see the file hash:
+```bash
+$ git cat-file -p a0b0b9e615e9e433eb5f11859e9feac4564c58c5
+100644 blob cd0875583aabe89ee197ea133980a9085d08e497	test.txt
+```
+
+Which itself contains the data:
+```bash
+$ git cat-file -p cd0875583aabe89ee197ea133980a9085d08e497
+Hello world!
+```
+
+In Git the data is not encrypted, but in restic everything including the metadata is encrypted by default.
+
+One of the key differences in the repository structure is the way these tools handle deduplication.
+
+By default Git does not automatically deduplicate data - but it can (even if it's a binary file).
+
+Let's use the WikiCommons picture of the day as an example:
+```bash
+wget https://upload.wikimedia.org/wikipedia/commons/4/43/40._Schwimmzonen-_und_Mastersmeeting_Enns_2017_100m_Butterfly-9318.jpg
+git add 40._Schwimmzonen-_und_Mastersmeeting_Enns_2017_100m_Butterfly-9318.jpg
+git commit -m 'add wikicommons image of the day'
+$ tree .git/objects/
+.git/objects/
+├── 3e
+│   └── 87771a00208282cc8bc7e8edc1638f5db28ffd
+├── 62
+│   └── e56c460357fe6bcf213cbb17ab1e44dd80e72f
+├── 7d
+│   └── a6b592fe6fa7c7e63136a809f5169298e7ca9a
+├── a0
+│   └── b0b9e615e9e433eb5f11859e9feac4564c58c5
+├── cd
+│   └── 0875583aabe89ee197ea133980a9085d08e497
+├── db
+│   └── b1d1299a803b73bc156c0113b2fd4db506ed21
+├── info
+└── pack
+```
+
+We have three new blobs, one for the commit, and one for the tree, and one for the image:
+```bash
+$ git cat-file -p dbb1d1299a803b73bc156c0113b2fd4db506ed21 | xxd | head
+00000000: ffd8 ffe1 42c2 4578 6966 0000 4949 2a00  ....B.Exif..II*.
+00000010: 0800 0000 0900 0f01 0200 1200 0000 7a00  ..............z.
+00000020: 0000 1001 0200 0b00 0000 8c00 0000 1a01  ................
+00000030: 0500 0100 0000 9800 0000 1b01 0500 0100  ................
+00000040: 0000 a000 0000 2801 0300 0100 0000 0200  ......(.........
+00000050: 0000 3101 0200 3000 0000 a800 0000 3201  ..1...0.......2.
+00000060: 0200 1400 0000 d800 0000 3b01 0200 0d00  ..........;.....
+00000070: 0000 ec00 0000 6987 0400 0100 0000 fa00  ......i.........
+00000080: 0000 8e03 0000 4e49 4b4f 4e20 434f 5250  ......NIKON CORP
+00000090: 4f52 4154 494f 4e00 4e49 4b4f 4e20 4435  ORATION.NIKON D5
+```
+
+and it's 9.3MB in size.
+```bash
+$ ls -lh .git/objects/db/
+total 19080
+-r--r--r--  1 d.wells  staff   9.3M 11 Aug 17:59 b1d1299a803b73bc156c0113b2fd4db506ed21
+```
+
+What if we modify the image slightly by removing the exif data, and commit the change:
+```bash
+$ exiftool -all= 40._Schwimmzonen-_und_Mastersmeeting_Enns_2017_100m_Butterfly-9318.jpg
+$ git commit -am 'rm exif'
+$ tree .git/objects
+.git/objects
+├── 3e
+│   └── 87771a00208282cc8bc7e8edc1638f5db28ffd
+├── 5c
+│   └── e8aeba6e2dfa7feddddbd05518ffc78cfb9a74
+├── 5d
+│   └── d8688f1964de54d12f006751d0470cd5470bca
+├── 62
+│   └── e56c460357fe6bcf213cbb17ab1e44dd80e72f
+├── 6d
+│   └── 44f2242177a3e5f362320d87e9e66869732724
+├── 7d
+│   └── a6b592fe6fa7c7e63136a809f5169298e7ca9a
+├── a0
+│   └── b0b9e615e9e433eb5f11859e9feac4564c58c5
+├── cd
+│   └── 0875583aabe89ee197ea133980a9085d08e497
+├── db
+│   └── b1d1299a803b73bc156c0113b2fd4db506ed21
+├── info
+└── pack
+```
+
+As we can see from the file sizes it's storing basically the full image twice:
+```bash
+$ du -sh .git/objects/*/*
+4.0K	.git/objects/3e/87771a00208282cc8bc7e8edc1638f5db28ffd
+4.0K	.git/objects/5c/e8aeba6e2dfa7feddddbd05518ffc78cfb9a74
+9.3M	.git/objects/5d/d8688f1964de54d12f006751d0470cd5470bca
+4.0K	.git/objects/62/e56c460357fe6bcf213cbb17ab1e44dd80e72f
+4.0K	.git/objects/6d/44f2242177a3e5f362320d87e9e66869732724
+4.0K	.git/objects/7d/a6b592fe6fa7c7e63136a809f5169298e7ca9a
+4.0K	.git/objects/a0/b0b9e615e9e433eb5f11859e9feac4564c58c5
+4.0K	.git/objects/cd/0875583aabe89ee197ea133980a9085d08e497
+9.3M	.git/objects/db/b1d1299a803b73bc156c0113b2fd4db506ed21
+```
+
+however we can force git to store them as a delta compressed packfile:
+```bash
+$ git gc
+$ du -sh .git/objects/*/*
+4.0K	.git/objects/info/commit-graph
+4.0K	.git/objects/info/packs
+4.0K	.git/objects/pack/pack-bc1e6b3afe039a16062f84a3a9703cb2b50095fc.idx
+9.3M	.git/objects/pack/pack-bc1e6b3afe039a16062f84a3a9703cb2b50095fc.pack
+4.0K	.git/objects/pack/pack-bc1e6b3afe039a16062f84a3a9703cb2b50095fc.rev
+```
+
+Which when we inspect we can see it's storing the `5dd868` blob as a delta with `dbb1d12` as the base.
+```bash
+$ git verify-pack -v .git/objects/pack/pack-bc1e6b3afe039a16062f84a3a9703cb2b50095fc.idx
+5ce8aeba6e2dfa7feddddbd05518ffc78cfb9a74 commit 1115 824 12
+7da6b592fe6fa7c7e63136a809f5169298e7ca9a commit 1140 842 836
+62e56c460357fe6bcf213cbb17ab1e44dd80e72f commit 1074 790 1678
+dbb1d1299a803b73bc156c0113b2fd4db506ed21 blob   9796518 9766392 2468
+5dd8688f1964de54d12f006751d0470cd5470bca blob   608 286 9768860 1 dbb1d1299a803b73bc156c0113b2fd4db506ed21
+cd0875583aabe89ee197ea133980a9085d08e497 blob   13 22 9769146
+6d44f2242177a3e5f362320d87e9e66869732724 tree   134 141 9769168
+3e87771a00208282cc8bc7e8edc1638f5db28ffd tree   134 141 9769309
+a0b0b9e615e9e433eb5f11859e9feac4564c58c5 tree   36 47 9769450
+```
+
+For reference, the format of the `verify-pack` output is `SHA-1 type size size-in-packfile offset-in-packfile depth base-SHA-1`.
+
+The first blob size exactly matches the size of the original file
+
+```bash
+$ stat -F *
+-rw-r--r-- 1 d.wells staff 9739719 Aug 11 18:26:08 2024 40._Schwimmzonen-_und_Mastersmeeting_Enns_2017_100m_Butterfly-9318.jpg
+-rw-r--r-- 1 d.wells staff 9796518 Dec  8 21:15:40 2018 40._Schwimmzonen-_und_Mastersmeeting_Enns_2017_100m_Butterfly-9318.jpg_original
+````
+
+## Restic deduplication
+
+Let's compare to how restic deals with the same situation:
+```bash
+$ cd ../important_folder
+$ wget https://upload.wikimedia.org/wikipedia/commons/4/43/40._Schwimmzonen-_und_Mastersmeeting_Enns_2017_100m_Butterfly-9318.jpg
+$ cd ../
+$ restic backup important_folder -r restic_test_repo
+```
+
+Looking at the tree blob we can see the file has been split into multiple blobs:
+```bash
+$ restic -r restic_test_repo cat blob b62ffbab19a7d13a6d1b75b800e0696023eca6c3764dc92c0cf12052ce74f806 | jq .nodes[0]
+```
+```json
+{
+  "name": "40._Schwimmzonen-_und_Mastersmeeting_Enns_2017_100m_Butterfly-9318.jpg",
+  "type": "file",
+  "mode": 420,
+  "mtime": "2018-12-08T21:15:40Z",
+  "atime": "2018-12-08T21:15:40Z",
+  "ctime": "2024-08-11T19:15:00.431446219+01:00",
+  "uid": 501,
+  "gid": 20,
+  "user": "d.wells",
+  "group": "staff",
+  "inode": 160717651,
+  "device_id": 16777220,
+  "size": 9796518,
+  "links": 1,
+  "content": [
+    "3e8e9518f7902d0c85d0e360588ac09fa452b93197b5e1992541b059f19d890a",
+    "abe229dee0fa72d4e9ab6119c4a407b1aa11120869db9eabec1881da643c4d04",
+    "1fae2b84184a8bd08798e507961defdbb9f94517d09f9fb7609ca4c00df48269",
+    "5a5128b1ea54610cb84933ca34fbca5bcba75efa9dbaf23991e52525ad322e7e",
+    "48191565cdfd401d84ba1e1c9125b094749b56e5a487253c4cb54a05e077e057",
+    "cabc295329d0c9f65d7e5de5fa1eee591a3b01ec813f4b09c0323280d9dac0e5",
+    "7c19467f605abc69c0aaa6a396d72295206a15ead35100e398f8afe6528cac00",
+    "e7182081cb81a4b65a600f7172a090c8fc94658f620f970484d027a0b08cc9e0"
+  ]
+}
+```
+
+The index shows these data blobs are stored in a single pack file:
+```bash
+$ restic -r restic_test_repo cat index 1ef4bfe75cd29d5490861c75aae4ab6e4669865836080e27afa95b87edcf76dd | jq
+```
+```json
+{
+  "packs": [
+    {
+      "id": "1649c27d8f5d26acca5951b77db482735c0684af3a39222ef19b3d851c4a5a68",
+      "blobs": [
+        {
+          "id": "1fae2b84184a8bd08798e507961defdbb9f94517d09f9fb7609ca4c00df48269",
+          "type": "data",
+          "offset": 0,
+          "length": 597815,
+          "uncompressed_length": 597758
+        },
+        {
+          "id": "5a5128b1ea54610cb84933ca34fbca5bcba75efa9dbaf23991e52525ad322e7e",
+          "type": "data",
+          "offset": 597815,
+          "length": 671770,
+          "uncompressed_length": 671710
+        },
+        {
+          "id": "abe229dee0fa72d4e9ab6119c4a407b1aa11120869db9eabec1881da643c4d04",
+          "type": "data",
+          "offset": 1269585,
+          "length": 1298058,
+          "uncompressed_length": 1297986
+        },
+        {
+          "id": "e7182081cb81a4b65a600f7172a090c8fc94658f620f970484d027a0b08cc9e0",
+          "type": "data",
+          "offset": 2567643,
+          "length": 659039,
+          "uncompressed_length": 658979
+        },
+        {
+          "id": "48191565cdfd401d84ba1e1c9125b094749b56e5a487253c4cb54a05e077e057",
+          "type": "data",
+          "offset": 3226682,
+          "length": 1145587,
+          "uncompressed_length": 1145518
+        },
+        {
+          "id": "cabc295329d0c9f65d7e5de5fa1eee591a3b01ec813f4b09c0323280d9dac0e5",
+          "type": "data",
+          "offset": 4372269,
+          "length": 1268282,
+          "uncompressed_length": 1268210
+        },
+        {
+          "id": "3e8e9518f7902d0c85d0e360588ac09fa452b93197b5e1992541b059f19d890a",
+          "type": "data",
+          "offset": 5640551,
+          "length": 1735219,
+          "uncompressed_length": 1767868
+        },
+        {
+          "id": "7c19467f605abc69c0aaa6a396d72295206a15ead35100e398f8afe6528cac00",
+          "type": "data",
+          "offset": 7375770,
+          "length": 2388588,
+          "uncompressed_length": 2388489
+        }
+      ]
+    },
+    {
+      "id": "721812869a1fadd97d405ae4f1f3f9452720d65ebe395d1b5664d800cc12557d",
+      "blobs": [
+        {
+          "id": "b62ffbab19a7d13a6d1b75b800e0696023eca6c3764dc92c0cf12052ce74f806",
+          "type": "tree",
+          "offset": 0,
+          "length": 907,
+          "uncompressed_length": 2192
+        },
+        {
+          "id": "7c5fe5d783c793886755269f904b6bdb95f3b33bd41217d1cc1c77ba4fd83c2b",
+          "type": "tree",
+          "offset": 907,
+          "length": 275,
+          "uncompressed_length": 392
+        }
+      ]
+    }
+  ]
+}
+```
+
+If we remove the exif data from the image and back it up again we can see that the additional pack file is just 1.6MB rather than 9.3MB:
+```bash
+cd important_folder
+$ exiftool -all= 40._Schwimmzonen-_und_Mastersmeeting_Enns_2017_100m_Butterfly-9318.jpg
+$ rm 40._Schwimmzonen-_und_Mastersmeeting_Enns_2017_100m_Butterfly-9318.jpg_original
+$ cd ../
+$ restic backup important_folder -r restic_test_repo
+$ du -sh restic_test_repo/data/* | grep -v 0B
+9.3M	restic_test_repo/data/16
+4.0K	restic_test_repo/data/64
+4.0K	restic_test_repo/data/72
+1.6M	restic_test_repo/data/79
+4.0K	restic_test_repo/data/86
+4.0K	restic_test_repo/data/c8
+4.0K	restic_test_repo/data/e1
+$ restic -r restic_test_repo cat blob a96b5599fda06e3bd0164b20d4d470e940605c136592a3a9e9f0926d4b7ad3c0 | jq .nodes[0]
+```
+
+Only the first blob is different, because only the first part of the file changed.
+```json
+{
+  "name": "40._Schwimmzonen-_und_Mastersmeeting_Enns_2017_100m_Butterfly-9318.jpg",
+  "type": "file",
+  "mode": 420,
+  "mtime": "2024-08-11T19:24:28.896688034+01:00",
+  "atime": "2024-08-11T19:24:28.896688034+01:00",
+  "ctime": "2024-08-11T19:24:28.901710013+01:00",
+  "uid": 501,
+  "gid": 20,
+  "user": "d.wells",
+  "group": "staff",
+  "inode": 160719266,
+  "device_id": 16777220,
+  "size": 9739719,
+  "links": 1,
+  "content": [
+    "7446f6ab0dd6d41521c3194f214a50c8b080f419debadc080f1deea763707562",
+    "abe229dee0fa72d4e9ab6119c4a407b1aa11120869db9eabec1881da643c4d04",
+    "1fae2b84184a8bd08798e507961defdbb9f94517d09f9fb7609ca4c00df48269",
+    "5a5128b1ea54610cb84933ca34fbca5bcba75efa9dbaf23991e52525ad322e7e",
+    "48191565cdfd401d84ba1e1c9125b094749b56e5a487253c4cb54a05e077e057",
+    "cabc295329d0c9f65d7e5de5fa1eee591a3b01ec813f4b09c0323280d9dac0e5",
+    "7c19467f605abc69c0aaa6a396d72295206a15ead35100e398f8afe6528cac00",
+    "e7182081cb81a4b65a600f7172a090c8fc94658f620f970484d027a0b08cc9e0"
+  ]
+}
+
+$ restic -r restic_test_repo cat index 83ccadd68a8762008ec24749298ec98bb60a5bf2a1d97cd7746b0cce1fb94d06 | jq
+```
+
+```json
+{
+  "packs": [
+    {
+      "id": "790c837585f2876f2b9275a2aa71c89b43d6e4c77fe1ee647e94316431b682d9",
+      "blobs": [
+        {
+          "id": "7446f6ab0dd6d41521c3194f214a50c8b080f419debadc080f1deea763707562",
+          "type": "data",
+          "offset": 0,
+          "length": 1711153,
+          "uncompressed_length": 1711069
+        }
+      ]
+    },
+    {
+      "id": "64d0fc00583e81f199a2bb0b8e456d92ce46a3a26fa2581d48cc824ddeb0d993",
+      "blobs": [
+        {
+          "id": "a96b5599fda06e3bd0164b20d4d470e940605c136592a3a9e9f0926d4b7ad3c0",
+          "type": "tree",
+          "offset": 0,
+          "length": 890,
+          "uncompressed_length": 2222
+        },
+        {
+          "id": "e351370c85f454f68a5c6b37410a39fb0f875f80c8fa8eda00be771436b51ff8",
+          "type": "tree",
+          "offset": 890,
+          "length": 275,
+          "uncompressed_length": 392
+        }
+      ]
+    }
+  ]
+}
+```
+
+So the overall storage footprint is actually not quite as efficient as git, but it's still pretty good and you get it without having to ask (`git gc`).
+With restic you also get the added benefit of encryption by default.
+
+The git deltification approach also doesn't scale well in some cases. For example if you have multiple changes, git will store it as multiple deltas and you get back the original you have to apply all the deltas in sequence. This can be slow and inefficient for large files.
+
+Further, git checks for deltas by looking at similar files ([based on type, basename, size](https://github.com/git/git/blob/master/Documentation/technical/pack-heuristics.adoc)) with a window size of [10](https://github.com/git/git/blob/master/Documentation/config/pack.adoc).
+So if the files are different type then there will be no attempt to delta compress them.
+Or if there are more than 10 files separating two similar files then they will not be delta compressed.
+
+
+For example, let's create a git repository with 12 files, where the last file contains the same data as the first:
+```bash
+git init git_test_repo2
+cd git_test_repo2
+for i in {a..l}; do head -c15000000 /dev/random > file_$i; done
+cat file_a >> file_l
+time git add *
+git commit -m 'add 12 files'
+```
+
+The first thing that's noticeable is adding of the files takes a while:
+```
+real	0m10.218s
+user	0m7.274s
+sys	0m0.907s
+```
+
+Initially there are 12 large binary files:
+```bash
+$ du -sh .git/objects/*/*
+4.0K	.git/objects/15/4a42866fbe0c8a07782a629b63283d5e2409f5
+ 29M	.git/objects/17/6048ca6a73fba595d06ed94da2d2a97580ee31
+ 14M	.git/objects/32/3c1aa2428a2a1bf41a2af13d44fe60919bf186
+ 14M	.git/objects/3a/923ca14bd3b65814b1c35d6c6cf34df2eed536
+ 14M	.git/objects/41/324e907b95c6215e186c46a9545d59ff81f53c
+4.0K	.git/objects/4e/2ebdaef7fc7b8dad8b372d3306c1b3dc773e15
+ 14M	.git/objects/51/e8d5e9a0c2effe63c9bc72b7b5c0286fd1fc14
+ 14M	.git/objects/5d/14545c70bf7cff9d15526568458a0ec09843e5
+ 14M	.git/objects/6a/8c998e0ec5f12124a08f35eeb9c1ca2bf942ef
+ 14M	.git/objects/8f/290abbe9dc1754d2ca4dc90b4135f68b297734
+ 14M	.git/objects/9f/350b2d232756731fcd832e58e3e176a25c5430
+ 14M	.git/objects/b0/91ea678a8e11e3445f309e7c01a0fa00c598d9
+ 14M	.git/objects/e4/75a813d8c800ca9bc38076da7eec784ea321e1
+ 14M	.git/objects/fa/3d252ad959c989c1b61c13746233084f15445d
+```
+
+After running `git gc` (which takes a while), we see that no files are stored as a delta:
+```bash
+$ git gc
+Enumerating objects: 14, done.
+Counting objects: 100% (14/14), done.
+Delta compression using up to 12 threads
+Compressing objects: 100% (14/14), done.
+Writing objects: 100% (14/14), done.
+Total 14 (delta 0), reused 0 (delta 0), pack-reused 0 (from 0)
+```
+
+Which we can confirm by inspecting the pack file:
+```bash
+du -shA .git/objects/pack/*
+1.5K	.git/objects/pack/pack-341003f26b31538ba21ee311598eaa28ff6987f3.idx
+186M	.git/objects/pack/pack-341003f26b31538ba21ee311598eaa28ff6987f3.pack
+512B	.git/objects/pack/pack-341003f26b31538ba21ee311598eaa28ff6987f3.rev
+
+$ git verify-pack -v .git/objects/pack/pack-341003f26b31538ba21ee311598eaa28ff6987f3.pack
+1f54af55ed0b9c26871aedbe8aa839ab8f94e46a commit 1072 789 12
+f31544f75664645ce27090dbd4423a0ff0851669 blob   15000000 15004590 801
+a5ca2ccd0d94a47566022773735252f01ba7ed88 blob   15000000 15004590 15005391
+90a7ad457bae95ca492eb47c520fb621e84c6f46 blob   15000000 15004590 30009981
+7a4a369e4bacb4c4d0e3a6dcfab537d1650df52b blob   15000000 15004590 45014571
+76f1f1558dc8ea1b319657c930691d0a0c685187 blob   15000000 15004590 60019161
+99c24b2c38bb86c366b422d498919d3703f70d7f blob   15000000 15004590 75023751
+d580c3a754f71617f75dfc627058be826690f7ef blob   15000000 15004590 90028341
+418300e7842face4007e1be27720495bf3cf8817 blob   15000000 15004590 105032931
+58cc2f0c3d94c57b10a0c9175a76c0a9bb70af1b blob   15000000 15004590 120037521
+78d5a83e477681fb10c1bc9249658d80bbb301b4 blob   15000000 15004590 135042111
+667599080e8da151ad42709a2f860ec0c53294b5 blob   15000000 15004590 150046701
+d2f5b83ac8e621d94988b3d9f3855b84255839b6 blob   30000000 30009165 165051291
+120485bb2196d0a73ea7b0a35fa8b1e3d666a53d tree   408 323 195060456
+non delta: 14 objects
+.git/objects/pack/pack-97d0c9352ca56e8e1020fe5000f0dbe50a6e2ed6.pack: ok
+```
+
+However, we can force git to store the last file as a delta by repacking with a larger window size:
+```bash
+$ git repack -a -d -f --window 11
+Enumerating objects: 14, done.
+Counting objects: 100% (14/14), done.
+Delta compression using up to 12 threads
+Compressing objects: 100% (14/14), done.
+Writing objects: 100% (14/14), done.
+Total 14 (delta 1), reused 13 (delta 0), pack-reused 0 (from 0)
+```
+
+We can verify, the last file is now stored as a delta:
+```bash
+$ du -shA .git/objects/pack/*
+1.5K	.git/objects/pack/pack-74284e68a7ae476d2e8941afcf1a203d8a44d9bf.idx
+172M	.git/objects/pack/pack-74284e68a7ae476d2e8941afcf1a203d8a44d9bf.pack
+512B	.git/objects/pack/pack-74284e68a7ae476d2e8941afcf1a203d8a44d9bf.rev
+
+$ git verify-pack -v .git/objects/pack/pack-74284e68a7ae476d2e8941afcf1a203d8a44d9bf.pack
+4e2ebdaef7fc7b8dad8b372d3306c1b3dc773e15 commit 1072 791 12
+176048ca6a73fba595d06ed94da2d2a97580ee31 blob   30000000 30009165 803
+8f290abbe9dc1754d2ca4dc90b4135f68b297734 blob   1126 422 30009968 1 176048ca6a73fba595d06ed94da2d2a97580ee31
+b091ea678a8e11e3445f309e7c01a0fa00c598d9 blob   15000000 15004590 30010390
+9f350b2d232756731fcd832e58e3e176a25c5430 blob   15000000 15004590 45014980
+41324e907b95c6215e186c46a9545d59ff81f53c blob   15000000 15004590 60019570
+323c1aa2428a2a1bf41a2af13d44fe60919bf186 blob   15000000 15004590 75024160
+fa3d252ad959c989c1b61c13746233084f15445d blob   15000000 15004590 90028750
+6a8c998e0ec5f12124a08f35eeb9c1ca2bf942ef blob   15000000 15004590 105033340
+51e8d5e9a0c2effe63c9bc72b7b5c0286fd1fc14 blob   15000000 15004590 120037930
+e475a813d8c800ca9bc38076da7eec784ea321e1 blob   15000000 15004590 135042520
+5d14545c70bf7cff9d15526568458a0ec09843e5 blob   15000000 15004590 150047110
+3a923ca14bd3b65814b1c35d6c6cf34df2eed536 blob   15000000 15004590 165051700
+154a42866fbe0c8a07782a629b63283d5e2409f5 tree   408 323 180056290
+non delta: 13 objects
+chain length = 1: 1 object
+.git/objects/pack/pack-74284e68a7ae476d2e8941afcf1a203d8a44d9bf.pack: ok
+```
+
+Restic handles this situation more gracefully, automatically detecting and deduplicating the shared data:
+```bash
+restic init --repo restic_test_repo2
+mkdir 12_files
+cd 12_files
+for i in {a..l}; do head -c15000000 /dev/random > file_$i; done
+cat file_a >> file_l
+restic backup 12_files -r restic_test_repo2
+```
+
+We can immediately see that the stored data (173MiB) is smaller than the total file size (186MiB):
+```
+repository f2ae453c opened (version 2, compression level auto)
+no parent snapshot found, will read all files
+[0:00]          0 index files loaded
+
+Files:          12 new,     0 changed,     0 unmodified
+Dirs:            1 new,     0 changed,     0 unmodified
+Added to the repository: 173.154 MiB (173.162 MiB stored)
+processed 12 files, 185.966 MiB in 0:01
+snapshot a21ca4e2 save
+```
+
+And we can confirm this is due to deduplication by looking at the blob allocation for the first and last files:
+```bash
+restic -r restic_test_repo2 cat blob e63dbd2cd83414bdebfaf439c261362d0609ab4092a6076632b43dab674d428c | jq '.nodes | {first: .[0], last: .[-1]}'
+```
+
+All but one of blobs that contain the data for `file_a`, are shared with `file_l`:
+```json
+{
+  "first": {
+    "name": "file_a",
+    "type": "file",
+    "mode": 420,
+    "mtime": "2025-02-03T22:21:11.310727145Z",
+    "atime": "2025-02-03T22:21:11.310727145Z",
+    "ctime": "2025-02-03T22:21:11.310727145Z",
+    "uid": 501,
+    "gid": 20,
+    "user": "d.wells",
+    "group": "staff",
+    "inode": 166915384,
+    "device_id": 16777220,
+    "size": 15000000,
+    "links": 1,
+    "content": [
+      "776542d9ac5264815652d08eb637eb6198a13a8cf3d533a7d42da336a7cd6b0f",
+      "f10a41cebb70641db00a7346378d207f038a93e42da5ff4334bd987a64547b58",
+      "0b367568aed5111abf475dabe31f9959c34d7c13936bd496e20a4940d59dbbfc",
+      "823e46d1dd1981d005cd5e35d862e5d981ea7070d34e361cfd4b0532f16bd7a3",
+      "6f4e15bb2701e8802163de4087c3dda9bb0d307503bc6c2984c69e9837936548",
+      "6dfc21b79622eb07504311682ad12cd496af7a651908ec4fba71413e30667ae7",
+      "1c2733ae7e914162c6b9ff5321cf06c024769500770842868790a62fa3207e01",
+      "bfa29e622ddd9bed40c03bd4e531810d64f6586ddff343f93b5f25d2bcaeee79"
+    ]
+  },
+  "last": {
+    "name": "file_l",
+    "type": "file",
+    "mode": 420,
+    "mtime": "2025-02-03T22:21:14.058219875Z",
+    "atime": "2025-02-03T22:21:14.058219875Z",
+    "ctime": "2025-02-03T22:21:14.058219875Z",
+    "uid": 501,
+    "gid": 20,
+    "user": "d.wells",
+    "group": "staff",
+    "inode": 166915396,
+    "device_id": 16777220,
+    "size": 30000000,
+    "links": 1,
+    "content": [
+      "4462b55e5a6a499f4577caff7ecf8d502d6ce119a179e0200ad65b81d65717fe",
+      "1e884d6b02efcc9e350851bb159a9692c085fb3d8ce860b62871ede2cc90598d",
+      "617ca863ab5257cc8bc7c8f9afddc073d5dc45316f3a11a47cc039c7646af805",
+      "9b3c2da80d8122e3acf7364a3f7444ff1283af1b305ccf85ddd21db7e1d47086",
+      "9e4696cc8c50f1609b1adf6f79c4a44008e464bd8dcd13991f25d9ad4dc9a0c3",
+      "3e2a828a5313cdf05b702201530e25453ee70915d31224597e5742afb5fc43c5",
+      "f1ae23e3a094deaea0af8b5adfc0a923e728c94cfad7a16127147a16ad691098",
+      "52c98c1eec238450d95f83355f316cfa0119772466d70c5b594f156d1bbc42ff",
+      "1c42a6c2b7bd471df3bf12811647048cbf538dad4bc4b5b01100978f1baea1be",
+      "31c177c276a8336371dcfee4a3c166ea59b87b76cfe183eb182dcf246a63abdc",
+      "f10a41cebb70641db00a7346378d207f038a93e42da5ff4334bd987a64547b58",
+      "0b367568aed5111abf475dabe31f9959c34d7c13936bd496e20a4940d59dbbfc",
+      "823e46d1dd1981d005cd5e35d862e5d981ea7070d34e361cfd4b0532f16bd7a3",
+      "6f4e15bb2701e8802163de4087c3dda9bb0d307503bc6c2984c69e9837936548",
+      "6dfc21b79622eb07504311682ad12cd496af7a651908ec4fba71413e30667ae7",
+      "1c2733ae7e914162c6b9ff5321cf06c024769500770842868790a62fa3207e01",
+      "bfa29e622ddd9bed40c03bd4e531810d64f6586ddff343f93b5f25d2bcaeee79"
+    ]
+  }
+}
+```
+
+In this simple example, after forcing git to store the last file as a delta, git's deltification is slightly more efficient than restic's deduplication (171.76 vs 173.31 MiB):
+```bash
+du -shA git_test_repo2/.git/
+du -shA restic_test_repo2
+```
+```
+172M	git_test_repo2/.git/
+173M	restic_test_repo2
+```
+
+This is because much of the data in the unique blob/chunk created by concatenating the files is duplicated by the last and first blob of the original files.
+But the git approach is slow and doesn't scale well to large files or many files as it would have to check (load) every file against every other file to find potential deltas. This is not a criticism of git - for the purposes for which it was designed (source control) where the files are small, text based, and where fast retrieval is more of a priority it is well suited to its task. For backups, where the files can be large, binary, and where fast and efficient storage time is more important, restic's design is better suited.
+
+It's worth noting there is backup software called [bup](https://github.com/bup/bup) that uses the actual git repository format but with a more scalable deduplication algorithm (also based on content defined chunking, [which they call "hashsplitting"](https://github.com/bup/bup/blob/main/DESIGN.md#handling-large-files-cmdsplit-hashsplitsplit_to_blob_or_tree)). Though it doesn't support encryption and in general does not seem as mature as restic.
+
+In some ways backup software is solving a similar problem to data versioning software like [xet](https://github.com/xetdata/xet-core) (now unmaintained after acquisition by HuggingFace), [DVC](https://github.com/iterative/dvc) (ML focused - also tracks metrics etc.), [dud](https://github.com/kevin-hanselman/dud) (~simpler version of DVC) or [Oxen](https://github.com/Oxen-AI/Oxen) (which solves some of the scalability of many files in git but doesn't yet have block level deduplication). Though for backups in particular functions like purging and encryption are nice to have and not typically included. It would be interesting to compare these approaches in more detail, but that will have to wait for another day.
+
+# My personal backup strategy feat. Restic
+
+This is my personal backup strategy, mostly here to remind myself.
+
+## Goals
+
+To ensure the reasonable availability of my data.
+
+To clarify "reasonable", a recovery time of 1-2 days is acceptable, real or low time recovery is expressly not a requirement.
+
+Protection against the following failure modes:
+- Accidental deletion of data
+- Physical damage (including natural disasters)
+- Hardware failure
+- Theft
+- Ransomware
+
+Whilst maintaining the other two pillars of information security (confidentiality and integrity).
+
+The cost should be pretty low, no more than £100/yr.
+The total storage capacity should be at least 512 GB.
+
+## Strategy
+
+Redundancy is the key to availability, a common strategy is the 3-2-1 rule:
+- 3 copies of the data
+- 2 different media types
+- 1 offsite
+
+An alternative is the 3-2-1-1 rule which additionally stipulates that one of the copies should be offline. This protects against ransomware, which could potentially encrypt any non air-gapped storage.
+
+Let's look at the properties of different storage media I have at my disposal:
+
+| Name     | Capacity | Cost    | Transfer Speed | 500GB Backup time |
+|----------|----------|---------|-------|--------| 
+| HDD (Seagate)     | 1TB     | £45/TB/5yrs = £9/yr     | 100MB/s (USB 3.0) | 1.4 hours |
+| SSD (Samsung T7, reformatted to APFS)     | 1TB   | £80/TB/5yrs = £16/yr | ~500MB/s (USB 3.2, limited in practice by the laptop) | 17 mins |
+| Cloud (Backblaze B2) | ~PB?   | $6/TB/Month => £29/yr/500GB | 150Mb/s bidirectional | 11 hours |
+| Laptop  | 512GB      | £200 for extra 215GB  | Instant (relative to CPU) | NA |
+| Google Drive | 200GB | £25/yr | 150Mb/s bidirectional | 11 hours |
+
+Combined these options cost £79/yr, comfortably below the £100 specification maximum.
+The Google Drive is not technically required, but it's nice to have access to a subset of the data from my phone and searchable, as well as having the continuous backup.
+We could also do without B2, as it's the most expensive option and also the slowest, but it has the benefit of being an instant offsite option - whereas the offsite HDD would take a day of travel each way.
+
+The extra space above 500GB on the hard drives allows for some retention of historical backups. It also enables the possibility of a parallel storage system for archival data, who's primary location is the SDD and gets backed up to the cloud and the HDD, satisfying the 3-2-1-1 rule, while increasing total capacity.

@@ -79,7 +79,7 @@ def simulate_CADR_test(ke=0.3 + 0.005, kn=0.005, tmax=20):
     decay = pd.concat(decay)
 
     # now add fake data points
-    decay['measurement'] = np.NaN
+    decay['measurement'] = np.nan
     decay.loc[decay.time % 1 == 0, 'measurement'] = decay.loc[decay.time % 1 == 0, 'concentration'] + rng.normal(scale=0.02, size=tmax*2 + 2)
     decay.loc[decay.measurement>1, 'measurement'] = 1
     decay.loc[decay.measurement<0, 'measurement'] = 0
