@@ -2,3 +2,4 @@ requests
 pandas
 plotnine
 numpy
+flax
