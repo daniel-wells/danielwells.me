@@ -172,7 +172,7 @@ def train_model(X, y, key):
     b = 0.0
 
     learning_rate = 0.1
-    for i in range(500):
+    for i in range(501):
         w, b = update_step(w, b, X, y, learning_rate)
         if i % 100 == 0:
             current_loss = loss(w, b, X, y)
