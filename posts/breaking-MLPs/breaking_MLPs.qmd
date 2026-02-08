@@ -1,0 +1,230 @@
+---
+title: "Breaking multilayer perceptrons"
+date: 2026-02-08
+draft: false
+format: 
+  html:
+    code-fold: false
+---
+
+We previously saw how we can use JAX/Flax to train a logistic regression model and how that could be extended to a simple MLP (multilayer perceptron).
+
+Here we will use JAX to train an MLP (perhaps more accurately a fully connected feedforward network) to predict something a simpler logistic regression can't: a sine wave.
+This is a simple educational example, but these models can scale to much more complicated problems, and are a key component of GPT-style models.
+
+From an engineering perspective, statistical models are tools to solve problems.
+Each tool has its own properties, inductive biases and limitations, leading to different strengths and weaknesses when applied to a problem.
+So we'll try to explore the properties of these models and in particular in what situations they fail.
+
+## Understanding how the model can approximate any function
+
+The Universal Approximation Theorem states:
+
+> There exists a single layer feedforward network containing a finite number of neurons that can approximate any continuous function to arbitrary precision on a compact subset of $\mathbb{R}^n$.
+
+There is also an equivalent version for multiple hidden layers.
+However, existence does not guarantee learnability - how large the network needs to be is not specified, nor is how to train it.
+
+To demonstrate the theorem, we'll use gradient descent to train a simple model to predict a known function (plus some noise): a sine wave.
+
+We'll use a model with three hidden layers of 10 neurons each.
+
+The output of each node/neuron is the result of an activation function applied to a weighted sum of the outputs of the previous layer plus a bias (~intercept).
+Here for each neuron I use a tanh activation function, which is a sigmoidal function, very similar in shape to the logistic function used in the logistic regression model.
+$$
+y_i = \tanh(\sum_j w_{ij} x_j + b_i)
+$$
+Where $x_j$ is the output of the $j$-th neuron in the previous layer, $w_{ij}$ is the weight connecting the $j$-th neuron in the previous layer to the $i$-th neuron in the current layer, and $b_i$ is the bias of the $i$-th neuron in the current layer, and $y_i$ is the output of the $i$-th neuron in the current layer.
+
+This is a visualization of the trained network where the weights are shown as the thickness of the lines connecting the neurons and the bias is shown as the fill color of the nodes.
+
+![The [1,10,10,10,1] tanh model](model_tanh_1_10_10_10_1/plot_network.png)
+
+The final prediction is pretty close to the true sine wave:
+
+![Prediction with [1,10,10,10,1] tanh model](model_tanh_1_10_10_10_1/plot_prediction.png)
+
+To understand how the model is learning the sine wave (and to get some intuition about how it can approximate any function), we'll look at a simpler model with just one hidden layer of 10 neurons.
+
+The output of each neuron is a tanh function aligned and spaced such that the downwards and upwards curves align with the sine wave, so that the sum of the outputs of the neurons locally approximates the sine wave.
+
+![Hidden layer activations for the [1,10,1] tanh model](model_tanh_1_10_1/plot_activations_layer1.png)
+
+This animation shows the sum step by step:
+
+![Animation of summing of the hidden layer activations to produce the final sine wave prediction for the [1,10,1] tanh model](model_tanh_1_10_1/reconstruction_animation.gif)
+
+
+An alternative visualisation shows the contribution of each neuron as a column stacking either upwards or downwards depending on the sign of the contribution:
+
+![Summations of neuron outputs along the input space](model_tanh_1_10_1/plot_activations_waterfall_shifted.png)
+
+In this case a very simple model with just one hidden layer of 10 neurons is able to fit the sine wave well because the inductive biases of the hyperbolic tangent function (smoothness and plateauing) match the properties of the target output.
+
+## Piecewise linear inductive bias
+What if the activation function was not so similar to part of the sine wave?
+
+ReLU (rectified linear unit) is a simple piecewise linear activation function:
+
+$$ 
+\text{ReLU}(x) = \max(0, x)
+$$
+
+With the same network structure, but using ReLU as the activation function, the model does not do so well and you can clearly see the piecewise linear nature of the activation function.
+
+![Prediction with ReLU [1,10,1] model](model_relu_1_10_1/plot_prediction.png)
+
+Many more linear segments are required to approximate the sine wave - it's less efficient parameter-wise.
+
+::: {.callout-tip collapse="true"}
+### Alternative activation functions
+While the tanh model is more parameter efficient in this case, it is computationally more expensive to evaluate compared to ReLU.
+tanh also has a problem with vanishing gradients, as the derivative is close to zero for large values of x.
+That can result in gradient descent training being slow or stationary.
+ReLU doesn't have this problem for large x, but for negative x the gradient is zero.
+An alternative is the leaky ReLU activation function which maintains a small non-zero gradient for negative x:
+$$
+\text{Leaky ReLU}(x) = \max(\alpha x, x)
+$$
+where $\alpha$ is a small positive constant.
+
+There are also other activation functions that avoid the non-differentiability of ReLU at 0, such as GELU and Swish, which are smooth and can ultimately result in better performance.
+
+$$
+\mathrm{GELU}(x) = \frac{x}{2} \left(\mathrm{erfc} \left(
+      \frac{-x}{\sqrt{2}} \right) \right)
+$$
+where erfc is the complementary error function:
+$$
+\mathrm{erfc}(x) = \frac{2}{\sqrt{\pi}} \int_x^\infty e^{-t^2} dt
+$$
+The error function is computationally expensive and so a very good approximation is often used that ironically uses tanh:
+$$
+    \mathrm{GELU}(x) = \frac{x}{2} \left(1 + \mathrm{tanh} \left(
+      \sqrt{\frac{2}{\pi}} \left(x + 0.044715 x^3 \right) \right) \right)
+$$
+where tanh is the hyperbolic tangent function:
+$$
+\tanh(x) = \frac{e^x - e^{-x}}{e^x + e^{-x}}
+$$
+
+$$
+\mathrm{softplus}(x, \beta) = \frac{1}{\beta} \log(1 + e^{\beta x})
+$$
+
+$$
+\mathrm{mish}(x) = x \tanh(\mathrm{softplus}(x, 1))
+$$
+
+$$
+\mathrm{swish}(x) = \frac{x}{1 + e^{-x}}
+$$
+
+![Comparison of activation functions](activation_comparison.png)
+
+![Comparison of activation function derivatives](activation_derivative_comparison.png)
+
+:::
+
+Increasing the capacity of the model by using four hidden layers of 32 neurons each allows a closer fit:
+
+![The [1,32,32,32,32,1] ReLU model](model_relu_1_32_32_32_32_1/plot_network.png)
+
+![Prediction with [1,32,32,32,32,1] ReLU model](model_relu_1_32_32_32_32_1/plot_prediction.png)
+
+However, it's still not smooth.
+Increasing the capacity of the model further by using five hidden layers of 64 neurons each doesn't help:
+
+![The [1,64,64,64,64,64,1] ReLU model](model_relu_1_64_64_64_64_64_1/plot_network.png)
+
+![Prediction with [1,64,64,64,64,64,1] ReLU model](model_relu_1_64_64_64_64_64_1/plot_prediction.png)
+
+It appears that the model is overfitting to the noise in the training data. 
+For example, in the first negative bend the training data is slightly more negative on average than the true sine wave, and the model also predicts a more negative value there.
+
+Training on more data helps the model to learn the underlying function better and reduces the influence of the noise.
+
+![Prediction with [1,64,64,64,64,64,1] ReLU model with 10X more training data](model_relu_1_64_64_64_64_64_1_more_data/plot_prediction.png)
+
+This demonstrates the general principle that model complexity has to match the complexity of the data.
+If the model is too flexible it will overfit to the noise in the training data.
+If the model is not flexible enough it will underfit the training data.
+
+# Extrapolation and periodicity
+
+While these types of models can interpolate any function to arbitrary precision, in this case they completely fail to predict outside the range of the training data.
+In the extrapolation regions the nature of the activation functions are exposed with the ReLU model linearly extrapolating and the tanh model plateauing.
+
+![Prediction of the [1,64,64,64,64,64,1] ReLU model outside the range of the training data](model_relu_1_64_64_64_64_64_1_more_data_wide/plot_prediction.png)
+
+![Prediction of the [1,10,10,10,1] tanh model outside the range of the training data](model_tanh_1_10_10_10_1_wide/plot_prediction.png)
+
+The model architecture has no inductive bias to predict periodic functions.
+
+One way to fix this is to use an activation function that is itself periodic, e.g. $\sin(x)$ (and a special initialisation) - resulting in what's known as a SIREN model (Sinusoidal Representation Network).
+
+![Prediction with [1,10,1] sine model](model_sin_1_10_1/plot_prediction.png)
+
+Of course this is now a trivial task - we are using the solution to the problem as the activation function.
+
+Instead let's demonstrate with a square wave - which is periodic but not smooth.
+
+![Prediction with [1,15,15,15,1] sine model learning a square wave](model_sin_1_15_15_15_1_square/plot_prediction.png)
+
+The sine activation struggles to get perfect 90 degree corners which results in some "ringing" at the edges.
+This model is essentially learning a Fourier series approximation, and this overshoot at the discontinuities is known as the Gibbs phenomenon.
+
+But it can extrapolate!
+
+![Prediction with [1,15,15,15,1] sine model learning a square wave](model_sin_1_15_15_15_1_square_period_20/plot_prediction.png)
+
+... sort of.
+If you look closely the prediction looks slightly shifted as the extrapolation distance increases.
+
+Extrapolating much further out and the error is quite obvious, with what looks like a phase shift due to any slight error in the learnt parameters accumulating as extrapolation distance increases.
+The width of each square wave is too thin for the negative components and too wide for the positive components resulting in a large error despite being periodic.
+
+![Prediction with [1,15,15,15,1] sine model learning a square wave](model_sin_1_15_15_15_1_square_period_201/plot_prediction.png)
+
+To fix this you'd probably need to collect data for a region in this extrapolation region and retrain the model.
+
+There is an alternative way to bake in periodicity - using Fourier features.
+
+This is where the input is first transformed by using sine and cosine functions of different frequencies, and then the model is trained on the transformed input.
+
+The input $x$ is transformed into a set of $2N$ Fourier features using a range of frequencies $f \in [1, f_{max}]$:
+$$
+\text{concat}\left[\sin(10 \cdot f \cdot x), \cos(10 \cdot f \cdot x)\right]
+$$
+
+![Prediction with [1,15,15,1] ReLU model with Fourier features learning a square wave](model_fourier/plot_prediction.png)
+
+This actually looks better than the sine model because it doesn't show the Gibbs phenomenon, presumably because the activation functions are still ReLU.
+But Fourier features are less flexible than the sine activation function model as we have to choose the frequencies in advance.
+
+In terms of extrapolation, it can generate high error predictions outside the training range, though it doesn't have the same phase shift issue as the sine model (perhaps because the fundamental frequency happens to match the frequency of the square wave).
+
+![Prediction with [1,15,15,1] ReLU model with Fourier features learning a square wave](model_fourier_period_20/plot_prediction.png)
+
+A similar approach is used in LLMs to encode the position of tokens in the input sequence.
+
+## Spectral bias
+
+Fourier features also have the advantage of overcoming the spectral bias of MLPs (the tendency for MLPs to learn low frequency functions more easily than high frequency functions).
+
+For example, if we add a high frequency component to the square wave, the Fourier feature network is able to learn it relatively easily, while the standard MLP basically ignores the high frequency component.
+
+![Prediction with [1,15,15,1] ReLU model with Fourier features learning a square wave with a high frequency component](model_fourier_high_freq_15/plot_prediction.png)
+
+![Prediction with [1,20,15,15,15,1] ReLU model learning a square wave with a high frequency component](model_relu_extra20_high_freq_15/plot_prediction.png)
+
+The Fourier feature network converges faster and to a lower loss than the standard MLP network.
+
+![Comparison of training losses for Fourier feature network and ReLU only network](loss_comparison_fourier_relu_high_freq.png)
+
+# Theoretical guarantees vs practical performance
+
+While in theory MLPs are universal function approximators, in applied practice they have limitations.
+Like many statistical models, they can be poor extrapolators, are sensitive to the functional form assumptions (e.g. choice of activation functions), and can be difficult to train.
+Other limitations we haven't covered include the lack of built in spatial or sequential information (unlike Convolutional Neural Networks and Recurrent Neural Networks), and the difficulty in understanding/interpreting the model's coefficients (unlike more classical statistical models with fewer parameters).
+As ever, understanding the properties of your tools and how they interact with your problem - under what conditions they break - allows us to make reasonable trade-offs when forming a solution.
