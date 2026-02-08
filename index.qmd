@@ -26,7 +26,8 @@ about:
       href: http://open.spotify.com/user/1111629369
 ---
 
-I'm currently working at [Genomics plc](https://www.genomicsplc.com/) developing and applying statistical methods that use genetic data to estimate an individual's risk of various diseases.
+I'm currently working at [Genomics ltd](https://www.genomics.com/) developing, assessing, and applying statistical models to large omics datasets.
+My applied work covers discovery and validation of drug targets and biomarkers, as well as risk stratification for clinical trials and population health.
 
 Previously I completed a PhD in functional genomics at the University of Oxford, in which I used unsupervised statistical learning approaches to generate new scientific hypotheses and leads from high throughput genomics experiments ([thesis](https://github.com/daniel-wells/DPhil-Thesis)).
 Prior to that I was an experimental molecular biologist with experience in a range of biomedical fields including vaccinology/immunology, developmental biology, genome engineering, and oncology.
