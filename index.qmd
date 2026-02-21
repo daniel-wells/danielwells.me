@@ -1,6 +1,6 @@
 ---
 title: "Daniel Wells"
-description: "Molecular biologist turned statistician"
+description: "bio + stats + engineering"
 about:
   template: solana
   links:
