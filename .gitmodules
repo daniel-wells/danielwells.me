@@ -1,4 +1,4 @@
 [submodule "posts/air-purifier-n-of-1-trial"]
 	path = posts/air-purifier-n-of-1-trial
-	url = git@github.com:daniel-wells/air-purifier-n-of-1-trial.git
+	url = https://github.com/daniel-wells/air-purifier-n-of-1-trial.git
 	branch = publish
